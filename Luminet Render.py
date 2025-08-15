@@ -2,13 +2,13 @@
 
 
 #to-do:
-#instead of manually setting camera angles, write a look-at function
 #update to use full GR DEs on rays within a certain radius of the BH
 
 import numpy as np
 import matplotlib.pyplot as plt
 
-#test mode toggles extra print statements for debugging/sanity checks, ray visualization, and a checkerboard pattern on the disk to better visualize distortion
+#test mode toggles extra print statements for debugging/sanity checks, ray visualization, 
+#and a checkerboard pattern on the disk to better visualize distortion
 Testmode = True
 
 #-----    camera parameters     -----
