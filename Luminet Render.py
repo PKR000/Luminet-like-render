@@ -3,13 +3,12 @@
 
 #to-do:
 #instead of manually setting camera angles, write a look-at function
-
-
-
+#update to use full GR DEs on rays within a certain radius of the BH
 
 import numpy as np
 import matplotlib.pyplot as plt
 
+#test mode toggles extra print statements for debugging/sanity checks, ray visualization, and a checkerboard pattern on the disk to better visualize distortion
 Testmode = True
 
 #-----    camera parameters     -----
@@ -18,18 +17,21 @@ pixel_height = 1000
 fieldofview = 40    #in degrees
 focal_length = 1.0  #arbitrary units, just a ratio
 
-camera_pitch = np.deg2rad(50)    #rotation around x-axis
-camera_roll = np.deg2rad(0)     #rotation around y-axis
-camera_yaw = np.deg2rad(0)      #rotation around z-axis
+# Spherical camera parameters (relative to black hole at bh_pos)
+camera_radius = 18.0  # distance from black hole
+camera_theta = np.deg2rad(80)  # polar angle from +z axis (0 = above, 90 = in x-y plane)
+camera_phi = np.deg2rad(0)     # azimuthal angle from +x axis in x-y plane
 
-x_offset = 0.0  #camera position offset in x
-y_offset = 15.0  #camera position offset in y
-z_offset = -12.0  #camera position offset in z
-
-camera_position = np.array([x_offset, y_offset, z_offset])
+# Compute camera position in Cartesian coordinates
+bh_pos = np.array([0.0, 0.0, 0.0])
+x_cam = bh_pos[0] + camera_radius * np.sin(camera_theta) * np.cos(camera_phi)
+y_cam = bh_pos[1] + camera_radius * np.sin(camera_theta) * np.sin(camera_phi)
+z_cam = bh_pos[2] + camera_radius * np.cos(camera_theta)
+camera_position = np.array([x_cam, y_cam, z_cam])
+# (Obsolete manual camera orientation and offset variables removed)
 
 #----- Parameters / units -----
-M = .05          #BH mass in geometric units; Schwarzschild radius rs = 2M
+M = .00          #BH mass in geometric units; Schwarzschild radius rs = 2M
 rs = 2.0 * M
 bh_pos = np.array([0.0, 0.0, 0.0])
 r0 = camera_position - bh_pos  #vector from BH to camera position
@@ -55,21 +57,21 @@ def make_camera_rays(pixel_width, pixel_height, fieldofview, focal_length):
     norms = np.linalg.norm(rays, axis=-1, keepdims=True)
     rays /= norms #normalize rays to represent direction
 
-    #-----   camera rotation -----
-    Rx = np.array([[1, 0, 0],
-                   [0, np.cos(camera_pitch), -np.sin(camera_pitch)],
-                   [0, np.sin(camera_pitch),  np.cos(camera_pitch)]])
-    
-    Ry = np.array([[ np.cos(camera_roll), 0, np.sin(camera_roll)],
-                   [0, 1, 0],
-                   [-np.sin(camera_roll), 0, np.cos(camera_roll)]])
-    
-    Rz = np.array([[np.cos(camera_yaw), -np.sin(camera_yaw), 0],
-                   [np.sin(camera_yaw),  np.cos(camera_yaw), 0],
-                   [0, 0, 1]])
+    #-----   camera look-at rotation -----
+    # Forward vector (from camera to black hole)
+    forward = (bh_pos - camera_position)
+    forward /= np.linalg.norm(forward)
 
-    # Apply yaw, then pitch, then roll
-    R = Rz @ Rx @ Ry
+    # Choose up vector (z up, unless forward is parallel to z)
+    up_guess = np.array([0, 0, 1])
+    if np.allclose(np.abs(np.dot(forward, up_guess)), 1.0):
+        up_guess = np.array([0, 1, 0])
+    right = np.cross(up_guess, forward)
+    right /= np.linalg.norm(right)
+    up = np.cross(forward, right)
+
+    # Rotation matrix: columns are right, up, forward
+    R = np.stack([right, up, forward], axis=1)
     rays = rays @ R.T  # rotate each ray direction
 
     if Testmode == True:
@@ -135,7 +137,7 @@ axis_unit = np.zeros_like(axis)
 mask_axis = axis_norm[..., 0] > eps
 axis_unit[mask_axis] = axis[mask_axis] / axis_norm[mask_axis]
 
-# --- Rodrigues' rotation of D toward BH by angle Δ ---
+#----- Rodrigues' rotation of D toward BH by angle Δ -----
 cosD = np.cos(Delta)[..., None]  # (H,W,1)
 sinD = np.sin(Delta)[..., None]
 
@@ -183,7 +185,10 @@ checker_pattern = ((checker_u + checker_v) % 2).astype(float)
 
 # Apply to image
 image = np.zeros((pixel_height, pixel_width))
-image[hit_mask] = checker_pattern[hit_mask]
+if Testmode == True:
+    image[hit_mask] = checker_pattern[hit_mask]
+else:
+    image[hit_mask] = 1.0
 plt.imshow(image, cmap = 'gray', origin = 'lower')
-plt.gca().invert_yaxis()
+#plt.gca().invert_yaxis()
 plt.show()
