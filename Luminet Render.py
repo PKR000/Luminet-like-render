@@ -7,9 +7,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-#test mode toggles extra print statements for debugging/sanity checks, ray visualization, 
-#and a checkerboard pattern on the disk to better visualize distortion
-Testmode = True
+
+Testmode = False    #test mode toggles extra print statements for debugging/sanity checks, ray visualization 
+Checkering = True   #creates a checkerboard pattern on the disk to better visualize distortion
 
 #-----    camera parameters     -----
 pixel_width = 1000
@@ -31,7 +31,7 @@ camera_position = np.array([x_cam, y_cam, z_cam])
 # (Obsolete manual camera orientation and offset variables removed)
 
 #----- Parameters / units -----
-M = .00          #BH mass in geometric units; Schwarzschild radius rs = 2M
+M = .11          #BH mass in geometric units; Schwarzschild radius rs = 2M
 rs = 2.0 * M
 bh_pos = np.array([0.0, 0.0, 0.0])
 r0 = camera_position - bh_pos  #vector from BH to camera position
@@ -179,13 +179,13 @@ angles = np.arctan2(hit_y, hit_x)  # range -pi to pi
 angles_normalized = (angles + np.pi) / (2 * np.pi)  # 0 to 1
 
 # Create checkerboard pattern
-checker_u = np.floor(radii * 4)  # radial divisions (adjust 4 for more/less squares)
-checker_v = np.floor(angles_normalized * 25)  # angular divisions (adjust 8 for more wedges)
+checker_u = np.floor(radii * 4)  # radial divisions
+checker_v = np.floor(angles_normalized * 16)  # angular divisions
 checker_pattern = ((checker_u + checker_v) % 2).astype(float)
 
 # Apply to image
 image = np.zeros((pixel_height, pixel_width))
-if Testmode == True:
+if Checkering == True:
     image[hit_mask] = checker_pattern[hit_mask]
 else:
     image[hit_mask] = 1.0
