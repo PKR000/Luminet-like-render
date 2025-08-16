@@ -3,13 +3,18 @@
 
 #to-do:
 #update to use full GR DEs on rays within a certain radius of the BH
+#add coloration to accretion disk
+#make slideshow function to animate change in theta angle of camera
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+import io
 
 
 Testmode = False    #test mode toggles extra print statements for debugging/sanity checks, ray visualization 
 Checkering = True   #creates a checkerboard pattern on the disk to better visualize distortion
+Gifmaker = False    #if True, will create a gif of the camera orienting from above to below the black hole
 
 #-----    camera parameters     -----
 pixel_width = 1000
@@ -17,24 +22,42 @@ pixel_height = 1000
 fieldofview = 40    #in degrees
 focal_length = 1.0  #arbitrary units, just a ratio
 
-# Spherical camera parameters (relative to black hole at bh_pos)
+# Spherical camera positioning (relative to black hole at bh_pos)
 camera_radius = 18.0  # distance from black hole
 camera_theta = np.deg2rad(80)  # polar angle from +z axis (0 = above, 90 = in x-y plane)
 camera_phi = np.deg2rad(0)     # azimuthal angle from +x axis in x-y plane
 
-# Compute camera position in Cartesian coordinates
-bh_pos = np.array([0.0, 0.0, 0.0])
-x_cam = bh_pos[0] + camera_radius * np.sin(camera_theta) * np.cos(camera_phi)
-y_cam = bh_pos[1] + camera_radius * np.sin(camera_theta) * np.sin(camera_phi)
-z_cam = bh_pos[2] + camera_radius * np.cos(camera_theta)
-camera_position = np.array([x_cam, y_cam, z_cam])
-# (Obsolete manual camera orientation and offset variables removed)
+#create basic accretion disk scene
+bh_pos = np.array([0.0, 0.0, 0.0]) #this will likely always be the origin
+zdisk = 0.0                        #z offset for disk only; should always match bh z pos
+inner_radius = 1.0
+outer_radius = 4.0
 
 #----- Parameters / units -----
-M = .11          #BH mass in geometric units; Schwarzschild radius rs = 2M
+M = .05          #BH mass in geometric units; Schwarzschild radius rs = 2M
 rs = 2.0 * M
-bh_pos = np.array([0.0, 0.0, 0.0])
+
+#----- GIF creation parameters -----
+framecount = 60
+theta_degree_sweep = 40
+phi_degree_sweep = 0
+
+
+def sph_to_cart(r, theta, phi):
+    x = r * np.sin(theta) * np.cos(phi)
+    y = r * np.sin(theta) * np.sin(phi)
+    z = r * np.cos(theta)
+    return np.array([x, y, z])
+
+#camera position in Cartesian coordinates
+camera_cart = sph_to_cart(camera_radius, camera_theta,camera_phi)
+x_cam = bh_pos[0] + camera_cart[0]
+y_cam = bh_pos[1] + camera_cart[1]
+z_cam = bh_pos[2] + camera_cart[2]
+camera_position = np.array([x_cam, y_cam, z_cam]) #relative to black hole position
 r0 = camera_position - bh_pos  #vector from BH to camera position
+
+
 
 
 def make_camera_rays(pixel_width, pixel_height, fieldofview, focal_length):
@@ -107,88 +130,115 @@ rays = make_camera_rays(pixel_width=pixel_width, pixel_height=pixel_height,
                         fieldofview=fieldofview, focal_length=focal_length)
 
 
-#----- Impact parameter map b = || r0 x D || -----
-cross_r0_D = np.cross(np.broadcast_to(r0, rays.shape), rays)  # (H, W, 3)
-b = np.linalg.norm(cross_r0_D, axis=-1)                       # (H, W)
+def create_image(rays):
+    
+    #----- Impact parameter map b = || r0 x D || -----
+    cross_r0_D = np.cross(np.broadcast_to(r0, rays.shape), rays)  # (H, W, 3)
+    b = np.linalg.norm(cross_r0_D, axis=-1)                       # (H, W)
+    
+    #----- Weak-field deflection Δ = 4M/b (radians) -----
+    #approximation of gravitational deflection accurate in weak G fields
+    eps = 1e-12
+    Delta = np.zeros_like(b)
+    mask_b = b > eps
+    Delta[mask_b] = 4.0 * M / b[mask_b]
 
-#----- Weak-field deflection Δ = 4M/b (radians) -----
-eps = 1e-12
-Delta = np.zeros_like(b)
-mask_b = b > eps
-Delta[mask_b] = 4.0 * M / b[mask_b]
+    #diagnostics for deflection math
+    if Testmode == True:
+        Delta_deg = np.rad2deg(Delta)
+        print("b stats:  min={:.4f}, median={:.4f}, max={:.4f}".format(b.min(), np.median(b), b.max()))
+        print("Δ (deg):  min={:.4f}, median={:.4f}, max={:.4f}".format(Delta_deg[mask_b].min(),
+                                                                   np.median(Delta_deg[mask_b]),
+                                                                   Delta_deg[mask_b].max()))
 
-#diagnostics for deflection math
-if Testmode == True:
-    Delta_deg = np.rad2deg(Delta)
-    print("b stats:  min={:.4f}, median={:.4f}, max={:.4f}".format(b.min(), np.median(b), b.max()))
-    print("Δ (deg):  min={:.4f}, median={:.4f}, max={:.4f}".format(Delta_deg[mask_b].min(),
-                                                               np.median(Delta_deg[mask_b]),
-                                                               Delta_deg[mask_b].max()))
+        target_deg = 5.0
+        M_suggest = (np.deg2rad(target_deg) * np.median(b[mask_b])) / 4.0
+        print("Suggested M for ~{}° median deflection: {:.4f}".format(target_deg, M_suggest))
+    
+    #----- Build rotation axis: n̂ ∝ D × (-r0) -----
+    axis = np.cross(rays, -np.broadcast_to(r0, rays.shape))   # (H, W, 3)
+    axis_norm = np.linalg.norm(axis, axis=-1, keepdims=True)
 
-    target_deg = 5.0
-    M_suggest = (np.deg2rad(target_deg) * np.median(b[mask_b])) / 4.0
-    print("Suggested M for ~{}° median deflection: {:.4f}".format(target_deg, M_suggest))
+    axis_unit = np.zeros_like(axis)
+    mask_axis = axis_norm[..., 0] > eps
+    axis_unit[mask_axis] = axis[mask_axis] / axis_norm[mask_axis]
 
-#----- Build rotation axis: n̂ ∝ D × (-r0) -----
-axis = np.cross(rays, -np.broadcast_to(r0, rays.shape))   # (H, W, 3)
-axis_norm = np.linalg.norm(axis, axis=-1, keepdims=True)
+    #----- Rodrigues' rotation of D toward BH by angle Δ -----
+    cosD = np.cos(Delta)[..., None]  # (H,W,1)
+    sinD = np.sin(Delta)[..., None]
 
-axis_unit = np.zeros_like(axis)
-mask_axis = axis_norm[..., 0] > eps
-axis_unit[mask_axis] = axis[mask_axis] / axis_norm[mask_axis]
+    nxD = np.cross(axis_unit, rays)                             # n̂ × D
+    n_dot_D = np.sum(axis_unit * rays, axis=-1, keepdims=True)  # n̂·D
 
-#----- Rodrigues' rotation of D toward BH by angle Δ -----
-cosD = np.cos(Delta)[..., None]  # (H,W,1)
-sinD = np.sin(Delta)[..., None]
+    rotated = np.empty_like(rays)
+    rotated[mask_axis] = (rays[mask_axis] * cosD[mask_axis]
+                        + nxD[mask_axis] * sinD[mask_axis]
+                        + axis_unit[mask_axis] * n_dot_D[mask_axis] * (1.0 - cosD[mask_axis]))
+    
+    rotated[~mask_axis] = rays[~mask_axis]  # parallel case: no bend
 
-nxD = np.cross(axis_unit, rays)                      # n̂ × D
-n_dot_D = np.sum(axis_unit * rays, axis=-1, keepdims=True)  # n̂·D
-
-rotated = np.empty_like(rays)
-rotated[mask_axis] = (
-    rays[mask_axis] * cosD[mask_axis]
-    + nxD[mask_axis] * sinD[mask_axis]
-    + axis_unit[mask_axis] * n_dot_D[mask_axis] * (1.0 - cosD[mask_axis])
-)
-rotated[~mask_axis] = rays[~mask_axis]  # parallel case: no bend
-
-# Re-normalize
-rays_bent = rotated / np.linalg.norm(rotated, axis=-1, keepdims=True)
+    # Re-normalize
+    rays_bent = rotated / np.linalg.norm(rotated, axis=-1, keepdims=True)
 
 
+    t_vals = (zdisk-camera_position[2]) / rays_bent[...,2] #how much time for the ray to reach z disk
+    hit_x = camera_position[0] + t_vals * rays_bent[...,0] #x and y value when ray reaches z disk distance
+    hit_y = camera_position[1] + t_vals * rays_bent[...,1]
+
+    #solving for radius for each ray at zdisk
+    radii = np.sqrt(hit_x**2 + hit_y**2)
+
+    #where true, rays intersect with the disk
+    hit_mask = (t_vals > 0) & (radii >= inner_radius) & (radii <= outer_radius)
+
+    # Calculate polar coordinates for hits
+    angles = np.arctan2(hit_y, hit_x)  # range -pi to pi
+    angles_normalized = (angles + np.pi) / (2 * np.pi)  # 0 to 1
+
+    # Create checkerboard pattern
+    checker_u = np.floor(radii * 5)  # radial divisions
+    checker_v = np.floor(angles_normalized * 18)  # angular divisions
+    checker_pattern = ((checker_u + checker_v) % 2).astype(float)
+
+    # Apply to image
+    image = np.zeros((pixel_height, pixel_width))
+    if Checkering == True:
+        image[hit_mask] = checker_pattern[hit_mask]
+    else:
+        image[hit_mask] = 1.0
+    
+    plt.imshow(image, cmap = 'gray', origin = 'lower')
+    #plt.gca().invert_yaxis()
+    plt.show()
+    return image
+
+create_image(rays)
 
 
 
-#create basic scene
-zdisk = 0.0
-inner_radius = 1.0
-outer_radius = 4.0
 
-t_vals = (zdisk-camera_position[2]) / rays_bent[...,2] #how much time for the ray to reach z disk
-hit_x = camera_position[0] + t_vals * rays_bent[...,0] #x and y value when ray reaches z disk distance
-hit_y = camera_position[1] + t_vals * rays_bent[...,1]
 
-#solving for radius for each ray at zdisk
-radii = np.sqrt(hit_x**2 + hit_y**2)
 
-#where true, rays intersect with the disk
-hit_mask = (t_vals > 0) & (radii >= inner_radius) & (radii <= outer_radius)
 
-# Calculate polar coordinates for hits
-angles = np.arctan2(hit_y, hit_x)  # range -pi to pi
-angles_normalized = (angles + np.pi) / (2 * np.pi)  # 0 to 1
 
-# Create checkerboard pattern
-checker_u = np.floor(radii * 4)  # radial divisions
-checker_v = np.floor(angles_normalized * 16)  # angular divisions
-checker_pattern = ((checker_u + checker_v) % 2).astype(float)
 
-# Apply to image
-image = np.zeros((pixel_height, pixel_width))
-if Checkering == True:
-    image[hit_mask] = checker_pattern[hit_mask]
-else:
-    image[hit_mask] = 1.0
-plt.imshow(image, cmap = 'gray', origin = 'lower')
-#plt.gca().invert_yaxis()
-plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+
+def make_gif():
+    for theta in np.linspace(camera_theta, camera_theta + theta_degree_sweep,framecount):
+        camera_cart = sph_to_cart(camera_radius, camera_theta,camera_phi)
+
+
+#----- GIF creation -----
+
