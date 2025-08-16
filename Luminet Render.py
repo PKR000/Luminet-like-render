@@ -8,15 +8,17 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.animation as animation
+import imageio.v2 as imageio
+
 import io
 
 
 Testmode = False    #test mode toggles extra print statements for debugging/sanity checks, ray visualization 
 Checkering = True   #creates a checkerboard pattern on the disk to better visualize distortion
-Gifmaker = False    #if True, will create a gif of the camera orienting from above to below the black hole
+ShowImage = False   #if True, will show the final image after ray tracing
+Gifmaker = True    #if True, will create a gif of the camera orienting from above to below the black hole
 
-#-----    camera parameters     -----
+#----- camera parameters -----
 pixel_width = 1000
 pixel_height = 1000
 fieldofview = 40    #in degrees
@@ -24,7 +26,7 @@ focal_length = 1.0  #arbitrary units, just a ratio
 
 # Spherical camera positioning (relative to black hole at bh_pos)
 camera_radius = 18.0  # distance from black hole
-camera_theta = np.deg2rad(80)  # polar angle from +z axis (0 = above, 90 = in x-y plane)
+camera_theta = np.deg2rad(75)  # polar angle from +z axis (0 = above, 90 = in x-y plane)
 camera_phi = np.deg2rad(0)     # azimuthal angle from +x axis in x-y plane
 
 #create basic accretion disk scene
@@ -33,15 +35,19 @@ zdisk = 0.0                        #z offset for disk only; should always match 
 inner_radius = 1.0
 outer_radius = 4.0
 
+
 #----- Parameters / units -----
 M = .05          #BH mass in geometric units; Schwarzschild radius rs = 2M
 rs = 2.0 * M
 
-#----- GIF creation parameters -----
-framecount = 60
-theta_degree_sweep = 40
-phi_degree_sweep = 0
 
+#----- GIF creation parameters -----
+frames = []
+framecount = 60
+theta_degree_sweep = 30
+phi_degree_sweep = 360
+theta_rad_sweep = np.deg2rad(theta_degree_sweep)
+phi_rad_sweep = np.deg2rad(phi_degree_sweep)
 
 def sph_to_cart(r, theta, phi):
     x = r * np.sin(theta) * np.cos(phi)
@@ -55,12 +61,12 @@ x_cam = bh_pos[0] + camera_cart[0]
 y_cam = bh_pos[1] + camera_cart[1]
 z_cam = bh_pos[2] + camera_cart[2]
 camera_position = np.array([x_cam, y_cam, z_cam]) #relative to black hole position
-r0 = camera_position - bh_pos  #vector from BH to camera position
+  #vector from BH to camera position
 
 
 
 
-def make_camera_rays(pixel_width, pixel_height, fieldofview, focal_length):
+def make_camera_rays(pixel_width, pixel_height, fieldofview, focal_length, camera_position):
 
     aspect_ratio = pixel_width / pixel_height
     fov_rad = np.deg2rad(fieldofview)
@@ -126,13 +132,11 @@ def make_camera_rays(pixel_width, pixel_height, fieldofview, focal_length):
         plt.show()
     return rays
 
-rays = make_camera_rays(pixel_width=pixel_width, pixel_height=pixel_height, 
-                        fieldofview=fieldofview, focal_length=focal_length)
-
 
 def create_image(rays):
     
     #----- Impact parameter map b = || r0 x D || -----
+    r0 = camera_position - bh_pos
     cross_r0_D = np.cross(np.broadcast_to(r0, rays.shape), rays)  # (H, W, 3)
     b = np.linalg.norm(cross_r0_D, axis=-1)                       # (H, W)
     
@@ -156,6 +160,7 @@ def create_image(rays):
         print("Suggested M for ~{}° median deflection: {:.4f}".format(target_deg, M_suggest))
     
     #----- Build rotation axis: n̂ ∝ D × (-r0) -----
+    
     axis = np.cross(rays, -np.broadcast_to(r0, rays.shape))   # (H, W, 3)
     axis_norm = np.linalg.norm(axis, axis=-1, keepdims=True)
 
@@ -207,13 +212,54 @@ def create_image(rays):
     else:
         image[hit_mask] = 1.0
     
+
     plt.imshow(image, cmap = 'gray', origin = 'lower')
-    #plt.gca().invert_yaxis()
-    plt.show()
+    
+    
+    if ShowImage == True:
+        plt.show()
     return image
+
+def make_gif(radius, theta_start, phi_start, theta_sweep, phi_sweep, framecount, fps, filename="camera_sweep.gif"):
+    
+    theta_vals = np.linspace(theta_start, theta_start + theta_sweep, framecount)
+    phi_vals = np.linspace(phi_start, phi_sweep, framecount)
+
+    for theta, phi in zip(theta_vals, phi_vals):
+        camera_position[:] = sph_to_cart(radius, theta, phi)
+        
+        rays = make_camera_rays(pixel_width, pixel_height, 
+                        fieldofview, focal_length, camera_position)
+        image = create_image(rays)
+
+        fig, ax = plt.subplots()
+        ax.imshow(image, cmap="gray", origin="lower")
+        ax.axis("off")
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0)
+        buf.seek(0)
+
+        frames.append(imageio.imread(buf))
+        plt.close(fig)
+    
+    imageio.mimsave(filename, frames, fps=fps)
+    print(f"Saved GIF: {filename}")
+        
+
+
+'''
+rays = make_camera_rays(pixel_width=pixel_width, pixel_height=pixel_height, 
+                        fieldofview=fieldofview, focal_length=focal_length, 
+                        camera_position=camera_position)
 
 create_image(rays)
 
+'''
+
+
+make_gif(radius=camera_radius,theta_start=camera_theta,phi_start=camera_phi,theta_sweep=theta_rad_sweep,
+         phi_sweep=phi_rad_sweep, framecount=framecount, fps=10, filename="camera_sweep.gif")
 
 
 
@@ -231,13 +277,6 @@ create_image(rays)
 
 
 
-
-
-
-
-def make_gif():
-    for theta in np.linspace(camera_theta, camera_theta + theta_degree_sweep,framecount):
-        camera_cart = sph_to_cart(camera_radius, camera_theta,camera_phi)
 
 
 #----- GIF creation -----
