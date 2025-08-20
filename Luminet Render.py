@@ -7,7 +7,7 @@
 #when implementing full null geodesics, have precalculator and adaptive step size to speed up ray tracing
 #maybe shortcut the rendering process of GIFs by flipping the images instead of recalculating the rays
 
-from Functions import sph_to_cart, ortho_basis_for_ray, impact_parameter, initial_state_ray, make_camera_rays, create_image, make_gif
+from Functions import sph_to_cart, initial_state_ray, make_gif, geodesic_rhs
 import numpy as np
 import matplotlib.pyplot as plt
 import imageio.v2 as imageio
@@ -72,23 +72,18 @@ if Gifmaker == True:
 
 
 
-camera_position = np.array([10.0, 10.0, 10.0]) #test position
+camera_position = np.array([10.0, 0.0, 0.0]) #test position
 black_hole_position = np.array([0.0, 0.0, 0.0]) #test position
 
-print(initial_state_ray(camera_position, black_hole_position, ray_direction=-camera_position/np.linalg.norm(camera_position)))
+print(initial_state_ray(camera_position, black_hole_position, ray_direction=-camera_position/np.linalg.norm(camera_position), E=1.0, M=1.0))
 
 
+def test_case(camera_pos, ray_dir=-camera_position/np.linalg.norm(camera_position)):
+    state = initial_state_ray(camera_pos, np.array([0.0,0.0,0.0]), ray_dir, M)
+    derivs = geodesic_rhs(state, M)
+    print("state =", state)
+    print("derivatives =", derivs)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
+# 1. Directly above BH
+test_case(camera_position)

@@ -57,14 +57,13 @@ def ortho_basis_for_ray(camera_position, ray_direction):
     e_theta0 = np.cross(n_hat, e_r0)
     return e_r0, e_theta0, n_hat
 
-#Tested and working
-def initial_state_ray(camera_position, black_hole_position, ray_direction):
+#No bugs as far as I can tell, but not sure this is the right math.
+def initial_state_ray(camera_position, black_hole_position, ray_direction, E=1.0, M=0.05):
     '''
     Generate the starting 4-position, 4-momentum of a ray for integration in Schwarzschild spacetime.
     
-    Returns:
-    r0: normalized direction vector from camera to black hole
-    v_r0:
+    Returns a state array:
+    [t, r, theta, phi, p_t, p_r, p_theta, p_phi]
     '''
     t = 0.0
     r = np.linalg.norm(camera_position-black_hole_position)
@@ -75,18 +74,116 @@ def initial_state_ray(camera_position, black_hole_position, ray_direction):
 
     e_r, e_theta, e_phi = ortho_basis_for_ray(camera_position, ray_direction)
     
+    # k_r, k_theta, k_phi are unit-vector components: k_r^2 + k_theta^2 + k_phi^2 = 1
     k_r = np.dot(ray_direction, e_r)
     k_theta = np.dot(ray_direction, e_theta)
     k_phi = np.dot(ray_direction, e_phi)
 
     b = impact_parameter(camera_position,black_hole_position, ray_direction)
-
-    pt = 1.0
-    pr = k_r
-    ptheta = r0 *k_theta
-    pphi = r0 *np.sin(theta0) *k_phi
     
+
+    # Choose alpha to satisfy the null condition with the chosen p^t:
+    alpha = E / np.sqrt(k_r**2 + (1.0 - 2.0*M/r0)*(k_theta**2 + k_phi**2))
+
+    # Contravariant spatial components (drive dr/dλ, dθ/dλ, dφ/dλ)
+    pr     = alpha * k_r
+    ptheta = alpha * (k_theta / r0)
+    pphi   = alpha * (k_phi / (r0 * np.sin(theta0) + 1e-16))  # small eps for pole safety
+    
+    pt = E / (1 - 2*M/r0)
+
+
     return np.array([t,r0,theta0,phi0,pt,pr,ptheta,pphi])
+
+def position_derivatives(state):
+    """
+    Compute the derivatives of the spacetime coordinates 
+    (t, r, theta, phi) along the geodesic.
+
+    Parameters
+    ----------
+    state : array_like, shape (8,)
+        The current state vector:
+        [t, r, theta, phi, p_t, p_r, p_theta, p_phi]
+
+    Returns
+    -------
+    derivs : ndarray, shape (4,)
+        The derivatives [dt/dλ, dr/dλ, dθ/dλ, dφ/dλ]
+    """
+    t, r, th, ph, pt, pr, pth, pph = state
+    dt = pt
+    dr = pr
+    dth = pth / (r*r)
+    dph = pph / (r*r*np.sin(th)**2)
+
+    return np.array([dt, dr, dth, dph], dtype=float)
+
+def momentum_derivatives(state, M, eps=1e-12):
+    ''' 
+    Momentum (contravariant) derivatives for a photon in Schwarzschild spacetime.
+
+    Parameters
+    ----------
+    state : array_like, shape (8,)
+        [t, r, theta, phi, p^t, p^r, p^theta, p^phi]
+    M : float
+        Black hole mass in geometric units (G=c=1).
+    eps : float
+        Small regularizer to avoid division by zero near horizon/poles.
+    Returns'''
+
+    t, r, theta, phi, pt, pr, pth, pph = state
+
+    # Safeguards near horizon and poles
+    r = max(r, 2.0*M + eps) #eps avoids problems at horizon
+    f = 1.0 - 2.0*M / r
+    sin_th = np.sin(theta) #avoids problems at pole
+    cos_th = np.cos(theta)
+    sin_th_safe = sin_th if abs(sin_th) > eps else (eps if sin_th >= 0 else -eps)
+    cot_th = cos_th / sin_th_safe
+
+    # dp^t/dλ
+    dpt = -(2.0*M / (r*r * f)) * pt * pr
+
+    # dp^r/dλ
+    dpr = ( - (M * f / (r*r)) * (pt*pt)
+            + (M / (r*r * f)) * (pr*pr)
+            + (r * f) * (pth*pth)
+            + (r * f) * (sin_th*sin_th) * (pph*pph) )
+
+    # dp^θ/dλ
+    dpth = -(2.0 / r) * pr * pth + (sin_th * cos_th) * (pph*pph)
+
+    # dp^φ/dλ
+    dpph = -(2.0 / r) * pr * pph - 2.0 * cot_th * pth * pph
+
+    return np.array([dpt, dpr, dpth, dpph])
+
+def geodesic_rhs(state, M, eps=1e-12):
+    '''
+    Full RHS for photon geodesic equations in Schwarzschild spacetime.
+
+    Parameters
+    ----------
+    state : array_like, shape (8,)
+        [t, r, theta, phi, p^t, p^r, p^theta, p^phi]
+    M : float
+        Black hole mass in geometric units.
+
+    Returns
+    -------
+    dstate : ndarray, shape (8,)
+        Derivatives wrt affine parameter λ:
+        [dt/dλ, dr/dλ, dθ/dλ, dφ/dλ, dp^t/dλ, dp^r/dλ, dp^θ/dλ, dp^φ/dλ]
+    '''
+        
+    dt, dr, dth, dph = position_derivatives(state)
+    dpt, dpr, dpth, dpph = momentum_derivatives(state, M, eps=eps)
+
+    return np.array([dt, dr, dth, dph, dpt, dpr, dpth, dpph])
+
+
 
 
 def make_camera_rays(pixel_width, pixel_height, fieldofview, focal_length, camera_position,black_hole_position = np.array([0.0, 0.0, 0.0])):
