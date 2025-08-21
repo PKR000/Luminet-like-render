@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import imageio.v2 as imageio
 import io
+from scipy.integrate import solve_ivp
 
 #tested and working
 def sph_to_cart(r, theta, phi):
@@ -95,95 +96,6 @@ def initial_state_ray(camera_position, black_hole_position, ray_direction, E=1.0
 
     return np.array([t,r0,theta0,phi0,pt,pr,ptheta,pphi])
 
-def position_derivatives(state):
-    """
-    Compute the derivatives of the spacetime coordinates 
-    (t, r, theta, phi) along the geodesic.
-
-    Parameters
-    ----------
-    state : array_like, shape (8,)
-        The current state vector:
-        [t, r, theta, phi, p_t, p_r, p_theta, p_phi]
-
-    Returns
-    -------
-    derivs : ndarray, shape (4,)
-        The derivatives [dt/dλ, dr/dλ, dθ/dλ, dφ/dλ]
-    """
-    t, r, th, ph, pt, pr, pth, pph = state
-    dt = pt
-    dr = pr
-    dth = pth / (r*r)
-    dph = pph / (r*r*np.sin(th)**2)
-
-    return np.array([dt, dr, dth, dph], dtype=float)
-
-def momentum_derivatives(state, M, eps=1e-12):
-    ''' 
-    Momentum (contravariant) derivatives for a photon in Schwarzschild spacetime.
-
-    Parameters
-    ----------
-    state : array_like, shape (8,)
-        [t, r, theta, phi, p^t, p^r, p^theta, p^phi]
-    M : float
-        Black hole mass in geometric units (G=c=1).
-    eps : float
-        Small regularizer to avoid division by zero near horizon/poles.
-    Returns'''
-
-    t, r, theta, phi, pt, pr, pth, pph = state
-
-    # Safeguards near horizon and poles
-    r = max(r, 2.0*M + eps) #eps avoids problems at horizon
-    f = 1.0 - 2.0*M / r
-    sin_th = np.sin(theta) #avoids problems at pole
-    cos_th = np.cos(theta)
-    sin_th_safe = sin_th if abs(sin_th) > eps else (eps if sin_th >= 0 else -eps)
-    cot_th = cos_th / sin_th_safe
-
-    # dp^t/dλ
-    dpt = -(2.0*M / (r*r * f)) * pt * pr
-
-    # dp^r/dλ
-    dpr = ( - (M * f / (r*r)) * (pt*pt)
-            + (M / (r*r * f)) * (pr*pr)
-            + (r * f) * (pth*pth)
-            + (r * f) * (sin_th*sin_th) * (pph*pph) )
-
-    # dp^θ/dλ
-    dpth = -(2.0 / r) * pr * pth + (sin_th * cos_th) * (pph*pph)
-
-    # dp^φ/dλ
-    dpph = -(2.0 / r) * pr * pph - 2.0 * cot_th * pth * pph
-
-    return np.array([dpt, dpr, dpth, dpph])
-
-def geodesic_rhs(state, M, eps=1e-12):
-    '''
-    Full RHS for photon geodesic equations in Schwarzschild spacetime.
-
-    Parameters
-    ----------
-    state : array_like, shape (8,)
-        [t, r, theta, phi, p^t, p^r, p^theta, p^phi]
-    M : float
-        Black hole mass in geometric units.
-
-    Returns
-    -------
-    dstate : ndarray, shape (8,)
-        Derivatives wrt affine parameter λ:
-        [dt/dλ, dr/dλ, dθ/dλ, dφ/dλ, dp^t/dλ, dp^r/dλ, dp^θ/dλ, dp^φ/dλ]
-    '''
-        
-    dt, dr, dth, dph = position_derivatives(state)
-    dpt, dpr, dpth, dpph = momentum_derivatives(state, M, eps=eps)
-
-    return np.array([dt, dr, dth, dph, dpt, dpr, dpth, dpph])
-
-
 
 
 def make_camera_rays(pixel_width, pixel_height, fieldofview, focal_length, camera_position,black_hole_position = np.array([0.0, 0.0, 0.0])):
@@ -223,10 +135,9 @@ def make_camera_rays(pixel_width, pixel_height, fieldofview, focal_length, camer
     R = np.stack([right, up, forward], axis=1)
     rays = rays @ R.T  # rotate each ray direction
     
-    #Commented out for sanity
     return rays
 
-
+#Currently outdated, does not work.
 def create_image(rays):
     
     #----- Impact parameter map b = || r0 x D || -----
@@ -322,7 +233,7 @@ def create_image(rays):
         plt.show()
     return image
 
-
+#outdated, nonfunctional
 def make_gif(radius, theta_start, phi_start, theta_sweep, phi_sweep, framecount, fps, filename="camera_sweep.gif"):
     
     theta_vals = np.linspace(theta_start, theta_start + theta_sweep, framecount)
@@ -350,3 +261,150 @@ def make_gif(radius, theta_start, phi_start, theta_sweep, phi_sweep, framecount,
     
     imageio.mimsave(filename, frames, fps=fps)
     print(f"Saved GIF: {filename}")
+
+
+def christoffel_schwarzschild(state, M=1.0):
+    """
+    Christoffel symbols for the Schwarzschild metric.
+    
+    Parameters
+    ----------
+    x : array_like
+        Position [t, r, theta, phi].
+    M : float
+        Central mass (geometric units: G = c = 1).
+    
+    Returns
+    -------
+    Gamma : ndarray
+        Christoffel symbols Γ^μ_{αβ}, shape (4,4,4).
+    """
+    _, r, theta, _ = state[:4]
+    f = 1 - 2*M/(r+1e-12) #avoid division by zero at horizon
+    
+    Gamma = np.zeros((4,4,4))
+    
+    # Nonzero components
+    Gamma[0,0,1] = Gamma[0,1,0] = M / (r**2 * f)           # Γ^t_{tr}
+    Gamma[1,0,0] = M * f / (r**2)                          # Γ^r_{tt}
+    Gamma[1,1,1] = -M / (r**2 * f)                         # Γ^r_{rr}
+    Gamma[1,2,2] = -r * f                                  # Γ^r_{θθ}
+    Gamma[1,3,3] = -r * f * np.sin(theta)**2               # Γ^r_{φφ}
+    Gamma[2,1,2] = Gamma[2,2,1] = 1/r                      # Γ^θ_{rθ}
+    Gamma[2,3,3] = -np.sin(theta) * np.cos(theta)          # Γ^θ_{φφ}
+    Gamma[3,1,3] = Gamma[3,3,1] = 1/r                      # Γ^φ_{rφ}
+    Gamma[3,2,3] = Gamma[3,3,2] = 1/np.tan(theta)          # Γ^φ_{θφ}
+
+    return Gamma
+
+
+def position_derivatives(state):
+    """
+    Compute position derivatives dx^mu/dλ = p^mu.
+    
+    Parameters
+    ----------
+    state : array_like
+        State vector [t, r, theta, phi, pt, pr, ptheta, pphi].
+    
+    Returns
+    -------
+    dx : ndarray
+        Derivatives of position [dt/dλ, dr/dλ, dθ/dλ, dφ/dλ].
+    """
+    
+    pt, pr, ptheta, pphi = state[4:]
+    
+    return np.array([pt, pr, ptheta, pphi])
+
+
+def momentum_derivatives(state, M=1.0):
+    """
+    Compute momentum derivatives dp^mu/dλ = -Γ^μ_{αβ} p^α p^β.
+    
+    Parameters
+    ----------
+    state : array_like
+        State vector [t, r, theta, phi, pt, pr, ptheta, pphi].
+    christoffel_func : callable
+        Function that returns Christoffel symbols Γ^μ_{αβ} at given (t, r, θ, φ).
+        Should return array with shape (4, 4, 4).
+    
+    Returns
+    -------
+    dp : ndarray
+        Derivatives of momentum [dpt/dλ, dpr/dλ, dptheta/dλ, dpphi/dλ].
+    """
+    x = state[:4]
+    p = state[4:]
+    
+    Gamma = christoffel_schwarzschild(state,M)   # shape (4,4,4)
+    
+    dp = np.zeros(4)
+    for mu in range(4):
+        for alpha in range(4):
+            for beta in range(4):
+                dp[mu] -= Gamma[mu, alpha, beta] * p[alpha] * p[beta]
+    
+    return dp
+
+
+def geodesic_rhs(state, M=1.0):
+    """
+    Right-hand side of the geodesic equation for Schwarzschild spacetime.
+    
+    Parameters
+    ----------
+    state : array_like
+        [t, r, theta, phi, pt, pr, ptheta, pphi]
+    
+    Returns
+    -------
+    derivs : ndarray
+        Time derivative of state [dt/dλ, dr/dλ, dθ/dλ, dφ/dλ, dpt/dλ, dpr/dλ, dptheta/dλ, dpphi/dλ]
+    """
+    dx = position_derivatives(state)
+    dp = momentum_derivatives(state, M)
+    return np.concatenate([dx, dp])
+
+
+def rk4_step(func, state, h):
+    
+    k1 = func(state)
+    k2 = func(state + 0.5*h*k1)
+    k3 = func(state + 0.5*h*k2)
+    k4 = func(state + h*k3)
+
+    return state + (h/6.0)*(k1 + 2*k2 + 2*k3 + k4)
+
+
+def integrate_single_ray_geodesic(state0,h=0.01,nsteps=2000):
+    """
+    Integrate a single geodesic using RK4.
+    
+    Parameters
+    ----------
+    state0 : ndarray
+        Initial state [t, r, theta, phi, pt, pr, ptheta, pphi].
+    h : float
+        Step size in affine parameter λ.
+    nsteps : int
+        Number of integration steps.
+    
+    Returns
+    -------
+    trajectory : ndarray
+        Array of states, shape (nsteps+1, 8).
+    """
+
+    trajectory = np.zeros((nsteps+1, len(state0)))
+    trajectory[0] = state0
+
+    state = state0.copy()
+    for i in range(1, nsteps+1):
+        state = rk4_step(geodesic_rhs, state, h)
+        trajectory[i] = state
+        if state[1] <= 2.0:   # stop if r crosses horizon
+            trajectory = trajectory[:i+1]
+            break
+    return trajectory

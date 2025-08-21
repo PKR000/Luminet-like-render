@@ -7,11 +7,12 @@
 #when implementing full null geodesics, have precalculator and adaptive step size to speed up ray tracing
 #maybe shortcut the rendering process of GIFs by flipping the images instead of recalculating the rays
 
-from Functions import sph_to_cart, initial_state_ray, make_gif, geodesic_rhs
+from Functions import sph_to_cart, initial_state_ray, make_gif, geodesic_rhs, integrate_single_ray_geodesic
 import numpy as np
 import matplotlib.pyplot as plt
 import imageio.v2 as imageio
 import io
+from scipy.integrate import solve_ivp
 
 #these boolean toggles may get removed in the future
 Testmode = False    #test mode toggles extra print statements for debugging/sanity checks, ray visualization 
@@ -72,18 +73,28 @@ if Gifmaker == True:
 
 
 
-camera_position = np.array([10.0, 0.0, 0.0]) #test position
+camera_position = np.array([10.0, 10.0, 0.0]) #test position
 black_hole_position = np.array([0.0, 0.0, 0.0]) #test position
+ray_direction = np.array([1.0, 0.0, 0.0])
 
-print(initial_state_ray(camera_position, black_hole_position, ray_direction=-camera_position/np.linalg.norm(camera_position), E=1.0, M=1.0))
+# Initial state: [t, r, θ, φ, pt, pr, pθ, pφ]
+state0 = initial_state_ray(camera_position, black_hole_position, ray_direction, M=1.0, E=1.0)
+testcase = [0.0, 10.0, np.pi/2, 0.0, 1.0, 0.0, 0.0, 0.01] #test case for initial state
+print(state0)
 
+trajectory = integrate_single_ray_geodesic(testcase, h=0.01, nsteps=5000)
 
-def test_case(camera_pos, ray_dir=-camera_position/np.linalg.norm(camera_position)):
-    state = initial_state_ray(camera_pos, np.array([0.0,0.0,0.0]), ray_dir, M)
-    derivs = geodesic_rhs(state, M)
-    print("state =", state)
-    print("derivatives =", derivs)
+r_vals = trajectory[:,1]
+phi_vals = trajectory[:,3]
+x_vals = r_vals * np.cos(phi_vals)
+y_vals = r_vals * np.sin(phi_vals)
 
-
-# 1. Directly above BH
-test_case(camera_position)
+fig, ax = plt.subplots(figsize=(6,6))
+ax.plot(x_vals, y_vals, 'b-', lw=1.2, label="Photon path")
+ax.add_patch(plt.Circle((0,0), 2.0, color='k'))  # event horizon at r=2M
+ax.set_xlabel("x")
+ax.set_ylabel("y")
+ax.set_title("Photon trajectory around Schwarzschild BH")
+ax.set_aspect("equal")
+ax.legend()
+plt.show()
